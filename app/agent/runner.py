@@ -106,12 +106,15 @@ def clean_text(value: Any, limit: int = MAX_EVENT_TEXT) -> str:
 
 
 def relative_to_repo(path: str, workspace: Path) -> str:
-    candidate = path
-    for prefix in (str(workspace / REPO_DIRECTORY) + "/", str(workspace) + "/", REPO_DIRECTORY + "/"):
-        if candidate.startswith(prefix):
-            candidate = candidate[len(prefix):]
-            break
-    return candidate
+    candidate = Path(path)
+    if candidate.is_absolute():
+        resolved = candidate.resolve(strict=False)
+        for base in (workspace.resolve(strict=False) / REPO_DIRECTORY, workspace.resolve(strict=False)):
+            if resolved.is_relative_to(base):
+                return resolved.relative_to(base).as_posix()
+        return candidate.name
+    text = candidate.as_posix()
+    return text[len(REPO_DIRECTORY) + 1:] if text.startswith(REPO_DIRECTORY + "/") else text
 
 
 def describe_tool_use(block: ToolUseBlock, workspace: Path) -> str:

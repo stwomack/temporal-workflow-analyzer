@@ -425,3 +425,18 @@ def test_tool_descriptions_are_short_and_clean(tmp_path):
 def test_parse_report_accepts_fenced_json_and_overrides_repo_url():
     report = parse_report("```json\n" + valid_report_json() + "\n```", REPO_URL, docs_available=True)
     assert report.repo_url == REPO_URL
+
+
+def test_read_paths_through_symlinked_workspace_are_relative(tmp_path):
+    real = tmp_path / "real"
+    (real / "ws" / "repo" / "src").mkdir(parents=True)
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    workspace = link / "ws"
+    block = ToolUseBlock(id="1", name="Read", input={"file_path": str(real / "ws" / "repo" / "src" / "w.py")})
+    assert describe_tool_use(block, workspace) == "file read src/w.py"
+
+
+def test_read_paths_outside_workspace_show_only_the_name(tmp_path):
+    block = ToolUseBlock(id="1", name="Read", input={"file_path": "/etc/hosts"})
+    assert describe_tool_use(block, tmp_path / "ws") == "file read hosts"

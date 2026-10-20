@@ -54,8 +54,22 @@ Then open http://localhost:8000. The API creates one Temporal client at startup 
 
 All configuration comes from environment variables: ANTHROPIC_API_KEY, ANTHROPIC_MODEL, TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE, TEMPORAL_API_KEY, TASK_QUEUE, SCAN_ROOT, GITHUB_TOKEN, DEMO_REPO_URL, AGENT_MAX_TURNS (default 40), AGENT_MAX_BUDGET_USD (default 5.0), WORKER_MAX_CONCURRENT_ACTIVITIES (default 2) and WORKER_SHUTDOWN_GRACE_SECONDS (default 30) and TEMPORAL_UI_URL (default http://localhost:8233). See app/config.py for defaults.
 
+## Command line scan
+
+```
+uv run python scripts/scan_cli.py --local https://github.com/owner/repo
+```
+
+--local starts a throwaway Temporal dev server and an in-process worker. Without it the script connects to TEMPORAL_ADDRESS and runs its own worker on a private task queue; with --use-running-worker it only starts the workflow on TASK_QUEUE. Progress goes to stderr and the findings to stdout as plain text.
+
 ## Running tests
 
 ```
 uv run pytest
+```
+
+The end-to-end test is skipped unless DEMO_REPO_URL and ANTHROPIC_API_KEY are set. It starts a local dev server, runs a real scan and calls the Anthropic API:
+
+```
+DEMO_REPO_URL=https://github.com/stwomack/bad-temporal-workflow uv run pytest -m e2e -s
 ```

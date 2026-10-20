@@ -205,8 +205,8 @@
         "Progress notes record the actual findings returned for the demo repo so Steve can compare against the violations he planted"
       ],
       "priority": 12,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Verified: e2e test passed against https://github.com/stwomack/bad-temporal-workflow (7 findings, sorted, all files exist, critical present) in 53 s; scripts/scan_cli.py --local verified on octocat/Hello-World (zero findings) and an invalid URL (exit 2). Findings recorded in progress.txt."
     },
     {
       "id": "US-013",
