@@ -55,8 +55,8 @@
         "Unit tests include at least 15 accepted and rejected cases including injection attempts such as option-like strings and shell metacharacters"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Verified: 51 URL tests pass (9 accepted, 40 rejected, 2 behavior). Reuse by the API (US-010) and clone activity (US-004) must call app.repo_url.parse_github_repo_url; those stories verify the wiring."
     },
     {
       "id": "US-004",
