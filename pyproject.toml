@@ -30,6 +30,9 @@ packages = ["app"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    "error:Module .* was imported after initial workflow load:UserWarning",
+]
 markers = [
     "e2e: end-to-end tests that need DEMO_REPO_URL and ANTHROPIC_API_KEY",
 ]

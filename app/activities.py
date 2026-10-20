@@ -295,3 +295,11 @@ async def run_agent_scan(request: AgentScanRequest) -> dict:
         return await run_with_clean_cancellation(work)
     except AgentFailure as error:
         raise ApplicationError(str(error), type=error.error_type, non_retryable=error.non_retryable) from error
+
+
+@activity.defn
+async def cleanup_workspace() -> bool:
+    workspace = workspace_directory(activity.info().workflow_id or "")
+    existed = await asyncio.to_thread(workspace.exists)
+    await asyncio.to_thread(remove_path, workspace)
+    return existed

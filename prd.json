@@ -142,8 +142,8 @@
         "Workflow tests using the Temporal test environment and mocked activities cover success, clone failure with no retry for non-retryable types, agent failure, cancellation with cleanup, and the signal and query path"
       ],
       "priority": 8,
-      "passes": false,
-      "notes": "Verify the exact pattern for running cleanup after cancellation in the Python SDK from the skill and docs before implementing."
+      "passes": true,
+      "notes": "Verified: 10 workflow tests pass against a local Temporal dev server with mocked activities (155 total), including replay of success and cancellation histories and a pytest filter that fails on late sandbox imports."
     },
     {
       "id": "US-009",
