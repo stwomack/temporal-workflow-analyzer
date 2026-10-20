@@ -39,6 +39,21 @@ def test_group_headings_and_poll_interval():
     assert "/cancel" in SCRIPT
 
 
+def test_fix_it_now_opens_demo_dialog():
+    assert '<dialog id="fix-dialog"' in PAGE
+    assert '"Fix it now"' in SCRIPT
+    assert "fixDialog.showModal()" in SCRIPT
+    assert "Nothing is changed in the repository." in PAGE
+    for category in ["non_determinism", "retry_policy", "timeouts", "idempotency", "payload_size",
+                     "heartbeats", "versioning", "continue_as_new", "other"]:
+        assert f"    {category}: [" in SCRIPT
+
+
+def test_fix_demo_makes_no_network_calls():
+    fix_code = SCRIPT.split("function fixScript", 1)[1].split("function openFixDialog", 1)[0]
+    assert "fetch(" not in fix_code
+
+
 def test_untrusted_text_is_never_injected_as_html():
     assert "innerHTML" not in SCRIPT
     assert "outerHTML" not in SCRIPT

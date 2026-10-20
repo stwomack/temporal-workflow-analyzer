@@ -90,6 +90,8 @@ uv run uvicorn app.api:app --port 8000
 
 Open http://localhost:8000, paste a repository URL such as https://github.com/stwomack/bad-temporal-workflow and press Scan. The Temporal UI is at http://localhost:8233, and the page links to the workflow for each scan.
 
+Each finding has a Fix it now link. It opens a preview of a planned feature: a dialog that plays back a coding agent working the fix (reading the file, checking the docs, planning, editing, testing and branching) using the finding's category and fix text. It runs entirely in the browser and changes nothing in the scanned repository.
+
 ### Worker
 
 The worker connects to TEMPORAL_ADDRESS and TEMPORAL_NAMESPACE (with TLS and TEMPORAL_API_KEY when that key is set), registers RepoScanWorkflow and get_worker_task_queue on TASK_QUEUE and the four scan activities on its host queue, and removes scan directories under SCAN_ROOT older than one hour. It runs at most WORKER_MAX_CONCURRENT_ACTIVITIES activities at once (default 2) because each scan is CPU, memory and cost heavy. SIGINT or SIGTERM stops polling and gives running activities WORKER_SHUTDOWN_GRACE_SECONDS (default 30) to finish.

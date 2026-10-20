@@ -24,6 +24,8 @@
   --error-border: #e4a3a3;
   --error-text: #8c1d1d;
   --code-bg: #eef0f3;
+  --ok-text: #1d6b35;
+  --backdrop: rgba(17, 19, 24, 0.55);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -44,6 +46,8 @@
     --error-border: #7a3236;
     --error-text: #ffc2c2;
     --code-bg: #262932;
+    --ok-text: #8fdca6;
+    --backdrop: rgba(0, 0, 0, 0.65);
   }
 }
 * { box-sizing: border-box; }
@@ -154,6 +158,48 @@ h2 { font-size: 1.15rem; margin: 24px 0 12px; }
 }
 .finding p { margin: 4px 0; }
 .label { font-weight: 600; }
+.finding-actions { display: flex; gap: 16px; flex-wrap: wrap; align-items: baseline; margin-top: 8px; }
+button.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+}
+#fix-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+}
+#fix-dialog::backdrop { background: var(--backdrop); }
+.dialog-head, .dialog-foot { padding: 14px 16px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.dialog-head { border-bottom: 1px solid var(--border); }
+.dialog-foot { border-top: 1px solid var(--border); justify-content: space-between; }
+.dialog-head h2 { margin: 0; font-size: 1.05rem; flex: 1 1 240px; }
+.dialog-body { padding: 14px 16px; }
+#fix-log {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 12px;
+  height: min(380px, 50vh);
+  overflow-y: auto;
+  background: var(--code-bg);
+  border-radius: 8px;
+  font: 0.85rem/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+#fix-log li { white-space: pre-wrap; word-break: break-word; }
+.log-tool { color: var(--muted); }
+.log-tool::before { content: "$ "; }
+.log-step { font-weight: 600; }
+.log-step::before { content: "> "; }
+.log-ok { color: var(--ok-text); font-weight: 600; }
+.log-ok::before { content: "ok "; }
+.log-plan { padding-left: 2ch; }
 </style>
 </head>
 <body>
@@ -200,6 +246,25 @@ h2 { font-size: 1.15rem; margin: 24px 0 12px; }
     </div>
     <p id="no-findings" class="muted" hidden>No findings were reported.</p>
   </section>
+
+  <dialog id="fix-dialog" aria-labelledby="fix-title">
+    <div class="dialog-head">
+      <span id="fix-severity" class="severity"></span>
+      <h2 id="fix-title"></h2>
+      <button id="fix-close" type="button" class="secondary">Close</button>
+    </div>
+    <div class="dialog-body">
+      <div class="status-line">
+        <span id="fix-stage" class="stage"></span>
+        <span id="fix-location" class="location"></span>
+      </div>
+      <ul id="fix-log" aria-live="polite"></ul>
+    </div>
+    <div class="dialog-foot">
+      <span class="muted">Preview of an upcoming feature. Nothing is changed in the repository.</span>
+      <button id="fix-pr" type="button" disabled>Open pull request</button>
+    </div>
+  </dialog>
 </main>
 <script>
 (function () {
@@ -208,6 +273,46 @@ h2 { font-size: 1.15rem; margin: 24px 0 12px; }
   var POLL_INTERVAL_MS = 1500;
   var FINAL_STAGES = ["done", "failed", "cancelled"];
   var SEVERITY_ORDER = { critical: 0, high: 1, medium: 2 };
+  var FIX_STEP_DELAY_MS = 650;
+  var FIX_PLAYBOOK = {
+    non_determinism: [
+      "Move the non-deterministic call out of workflow code and into an activity, or use the SDK's deterministic equivalent for time, randomness and UUIDs",
+      "Guard the new code path with a patch marker so executions already in flight replay on the old path"
+    ],
+    retry_policy: [
+      "Set an explicit retry policy with exponential backoff and a maximum interval",
+      "Mark business validation errors as non-retryable so they fail fast instead of retrying forever"
+    ],
+    timeouts: [
+      "Set a start-to-close timeout sized to the activity's real worst-case duration",
+      "Add a heartbeat timeout if the activity runs long, so a dead worker is detected in seconds instead of minutes"
+    ],
+    idempotency: [
+      "Derive an idempotency key from the workflow id and activity id",
+      "Pass the key to the downstream call so a retried attempt cannot repeat the side effect"
+    ],
+    payload_size: [
+      "Store the large data in external storage and pass a reference through workflow and activity arguments",
+      "Keep each payload well under the 2 MB limit and the history under its size cap"
+    ],
+    heartbeats: [
+      "Heartbeat inside the long-running loop, recording progress in the heartbeat details",
+      "Set a heartbeat timeout on the activity options and resume from the last recorded progress on retry"
+    ],
+    versioning: [
+      "Wrap the changed logic in a patch or version marker",
+      "Keep the old branch until every execution started before the change has closed, then deprecate the patch"
+    ],
+    continue_as_new: [
+      "Check the SDK's continue-as-new suggestion or the history length on each loop iteration",
+      "Continue as new with the accumulated state carried forward as input, after draining pending signals and updates"
+    ],
+    other: [
+      "Apply the recommended Temporal pattern at the flagged location",
+      "Keep the change minimal and backward compatible with running executions"
+    ]
+  };
+  var REPLAY_CATEGORIES = ["non_determinism", "versioning", "continue_as_new"];
 
   var form = document.getElementById("scan-form");
   var input = document.getElementById("repo-url");
@@ -222,9 +327,15 @@ h2 { font-size: 1.15rem; margin: 24px 0 12px; }
   var temporalLink = document.getElementById("temporal-link");
   var eventsList = document.getElementById("events");
   var results = document.getElementById("results");
+  var fixDialog = document.getElementById("fix-dialog");
+  var fixLog = document.getElementById("fix-log");
+  var fixStage = document.getElementById("fix-stage");
+  var fixPullRequest = document.getElementById("fix-pr");
+  var reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   var currentScanId = null;
   var pollTimer = null;
+  var fixTimer = null;
 
   function safeHttpUrl(value) {
     if (typeof value !== "string") {
@@ -319,11 +430,7 @@ h2 { font-size: 1.15rem; margin: 24px 0 12px; }
     head.appendChild(element("span", "title", finding.title));
     item.appendChild(head);
 
-    var location = finding.file || "";
-    if (finding.line !== null && finding.line !== undefined) {
-      location += ":" + finding.line;
-    }
-    item.appendChild(element("span", "location", location));
+    item.appendChild(element("span", "location", findingLocation(finding)));
 
     var problem = element("p");
     problem.appendChild(element("span", "label", "Problem: "));
@@ -335,17 +442,111 @@ h2 { font-size: 1.15rem; margin: 24px 0 12px; }
     fix.appendChild(document.createTextNode(finding.fix || ""));
     item.appendChild(fix);
 
+    var actions = element("div", "finding-actions");
+    var fixButton = element("button", "link", "Fix it now");
+    fixButton.type = "button";
+    fixButton.addEventListener("click", function () { openFixDialog(finding); });
+    actions.appendChild(fixButton);
     var docUrl = safeHttpUrl(finding.doc_url);
     if (docUrl) {
-      var docs = element("p");
       var anchor = element("a", null, "Temporal documentation");
       anchor.href = docUrl;
       anchor.target = "_blank";
       anchor.rel = "noopener noreferrer";
-      docs.appendChild(anchor);
-      item.appendChild(docs);
+      actions.appendChild(anchor);
     }
+    item.appendChild(actions);
     return item;
+  }
+
+  function findingLocation(finding) {
+    var location = finding.file || "";
+    if (finding.line !== null && finding.line !== undefined) {
+      location += ":" + finding.line;
+    }
+    return location;
+  }
+
+  function branchName(finding) {
+    var slug = String(finding.title || "issue").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+    return "fix/" + (slug.replace(/-+$/, "") || "issue");
+  }
+
+  function fixScript(finding) {
+    var category = FIX_PLAYBOOK[finding.category] ? finding.category : "other";
+    var location = findingLocation(finding);
+    var replay = REPLAY_CATEGORIES.indexOf(category) !== -1;
+    var lines = [
+      { kind: "tool", text: "read " + location },
+      { kind: "tool", text: "skill temporal-developer" },
+      { kind: "tool", text: "docs lookup " + category.replace(/_/g, " ") },
+      { kind: "step", text: "Confirmed: " + (finding.problem || "") },
+      { kind: "step", text: "Plan" }
+    ];
+    FIX_PLAYBOOK[category].forEach(function (step, index) {
+      lines.push({ kind: "plan", text: (index + 1) + ". " + step });
+    });
+    lines.push(
+      { kind: "tool", text: "edit " + (finding.file || "") },
+      { kind: "step", text: "Applied: " + (finding.fix || "") },
+      { kind: "tool", text: replay ? "replay recorded workflow histories against the new code" : "run the existing test suite" },
+      { kind: "ok", text: replay ? "replay passed, no non-determinism errors" : "tests passed" },
+      { kind: "tool", text: "git checkout -b " + branchName(finding) },
+      { kind: "tool", text: "git commit -m \"Fix " + (finding.title || "Temporal issue") + "\"" },
+      { kind: "ok", text: "fix ready for review" }
+    );
+    return lines;
+  }
+
+  function stopFixRun() {
+    if (fixTimer !== null) {
+      window.clearTimeout(fixTimer);
+      fixTimer = null;
+    }
+  }
+
+  function appendFixLine(line) {
+    fixLog.appendChild(element("li", "log-" + line.kind, line.text));
+    fixLog.scrollTop = fixLog.scrollHeight;
+  }
+
+  function finishFixRun() {
+    fixTimer = null;
+    fixStage.textContent = "fix ready";
+    fixPullRequest.disabled = false;
+  }
+
+  function openFixDialog(finding) {
+    stopFixRun();
+    var severity = String(finding.severity || "");
+    var badge = document.getElementById("fix-severity");
+    badge.className = "severity severity-" + severity.replace(/[^a-z]/g, "");
+    badge.textContent = severity;
+    document.getElementById("fix-title").textContent = "#" + finding.rank + " " + (finding.title || "");
+    document.getElementById("fix-location").textContent = findingLocation(finding);
+    fixLog.replaceChildren();
+    fixPullRequest.disabled = true;
+    fixPullRequest.textContent = "Open pull request";
+
+    var lines = fixScript(finding);
+    if (reducedMotion) {
+      lines.forEach(appendFixLine);
+      finishFixRun();
+    } else {
+      var index = 0;
+      var next = function () {
+        appendFixLine(lines[index]);
+        index += 1;
+        fixStage.textContent = "working " + index + "/" + lines.length;
+        fixTimer = index < lines.length ? window.setTimeout(next, FIX_STEP_DELAY_MS) : null;
+        if (index === lines.length) {
+          finishFixRun();
+        }
+      };
+      fixStage.textContent = "starting";
+      fixTimer = window.setTimeout(next, FIX_STEP_DELAY_MS);
+    }
+    fixDialog.showModal();
   }
 
   function renderReport(report) {
@@ -480,6 +681,18 @@ h2 { font-size: 1.15rem; margin: 24px 0 12px; }
         setScanning(false);
         showError("Could not start scan", "The server could not be reached.");
       });
+  });
+
+  document.getElementById("fix-close").addEventListener("click", function () { fixDialog.close(); });
+  fixDialog.addEventListener("close", stopFixRun);
+  fixDialog.addEventListener("click", function (event) {
+    if (event.target === fixDialog) {
+      fixDialog.close();
+    }
+  });
+  fixPullRequest.addEventListener("click", function () {
+    fixPullRequest.disabled = true;
+    fixPullRequest.textContent = "Pull requests are coming soon";
   });
 
   cancelButton.addEventListener("click", function () {
