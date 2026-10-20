@@ -103,8 +103,8 @@
         "If the repo contains no Temporal code, the agent returns zero findings and a summary saying so"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Verified: 12 prompt tests pass (123 total). Agent behavior against the prompt is verified end to end in US-012."
     },
     {
       "id": "US-007",
