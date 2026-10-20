@@ -16,6 +16,8 @@ class Settings(BaseModel):
     scan_root: Path = Path(tempfile.gettempdir()) / "repo-scanner"
     github_token: str | None = None
     demo_repo_url: str | None = None
+    agent_max_turns: int = 40
+    agent_max_budget_usd: float = 5.0
 
 
 ENVIRONMENT_VARIABLES = {
@@ -28,6 +30,8 @@ ENVIRONMENT_VARIABLES = {
     "scan_root": "SCAN_ROOT",
     "github_token": "GITHUB_TOKEN",
     "demo_repo_url": "DEMO_REPO_URL",
+    "agent_max_turns": "AGENT_MAX_TURNS",
+    "agent_max_budget_usd": "AGENT_MAX_BUDGET_USD",
 }
 
 

@@ -4,7 +4,9 @@ Submit a public GitHub repository URL and get back a short, severity-ranked list
 
 ## Setup
 
-Requires Python 3.11 or newer and uv.
+Requires Python 3.11 or newer, uv, and git on the PATH of the worker.
+
+The Claude Agent SDK (claude-agent-sdk 0.2.168) ships a bundled Claude Code CLI (version 2.1.301) inside the Python wheel, so no separate Claude Code install is needed. Set cli_path only if you want to use a different CLI.
 
 ```
 uv venv --python 3.12
@@ -24,7 +26,7 @@ For every scan the worker copies these skills fresh into SCAN_ROOT/<workflow id>
 
 ## Configuration
 
-All configuration comes from environment variables: ANTHROPIC_API_KEY, ANTHROPIC_MODEL, TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE, TEMPORAL_API_KEY, TASK_QUEUE, SCAN_ROOT, GITHUB_TOKEN and DEMO_REPO_URL. See app/config.py for defaults.
+All configuration comes from environment variables: ANTHROPIC_API_KEY, ANTHROPIC_MODEL, TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE, TEMPORAL_API_KEY, TASK_QUEUE, SCAN_ROOT, GITHUB_TOKEN, DEMO_REPO_URL, AGENT_MAX_TURNS (default 40) and AGENT_MAX_BUDGET_USD (default 5.0). See app/config.py for defaults.
 
 ## Running tests
 

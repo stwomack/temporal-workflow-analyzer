@@ -124,8 +124,8 @@
         "Unit tests use a fake SDK query function to cover success, invalid output then repair, MCP failure degradation, and cancellation"
       ],
       "priority": 7,
-      "passes": false,
-      "notes": "Confirm with the temporal-developer skill how a long running async activity should heartbeat and how it receives cancellation, and how to obtain or construct a Client for signaling from within an activity for the installed temporalio version."
+      "passes": true,
+      "notes": "Verified: 22 agent tests with a fake SDK query function pass (145 total). Live check with the real bundled CLI: a full scan of a small planted repo returned 4 valid ranked findings, and a cancel after 12 s stopped the agent in 5.9 s with no child or claude processes left."
     },
     {
       "id": "US-008",

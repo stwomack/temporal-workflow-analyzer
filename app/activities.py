@@ -6,12 +6,28 @@ import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import claude_agent_sdk
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from app.agent.runner import (
+    AgentFailure,
+    AgentScan,
+    ProgressReporter,
+    build_options,
+    heartbeat_forever,
+    run_with_clean_cancellation,
+)
 from app.config import get_settings
+from app.models import PROGRESS_SIGNAL_NAME
 from app.repo_url import InvalidRepoUrlError, parse_github_repo_url
-from app.workspace import REPO_DIRECTORY_NAME, WorkspaceRepoMissingError, prepare_workspace_directory
+from app.workspace import (
+    REPO_DIRECTORY_NAME,
+    WORKSPACE_SKILLS_PATH,
+    WorkspaceRepoMissingError,
+    available_skills,
+    prepare_workspace_directory,
+)
 
 MAX_REPO_BYTES = 200 * 1024 * 1024
 MAX_REPO_FILES = 20_000
@@ -19,6 +35,7 @@ GIT_CLONE_TIMEOUT_SECONDS = 150
 MAX_GIT_ERROR_LENGTH = 300
 CLONE_MARKER_NAME = "clone-complete.json"
 WORKFLOW_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
+AGENT_HEARTBEAT_INTERVAL_SECONDS = 10.0
 
 NOT_FOUND_MARKERS = (
     "repository not found",
@@ -49,6 +66,11 @@ class CloneResult:
     clone_path: str
     file_count: int
     size_bytes: int
+
+
+@dataclass(frozen=True)
+class AgentScanRequest:
+    repo_url: str
 
 
 @dataclass(frozen=True)
@@ -223,3 +245,53 @@ async def prepare_workspace() -> WorkspaceResult:
     except WorkspaceRepoMissingError as error:
         raise ApplicationError(str(error), type="WorkspaceRepoMissing", non_retryable=True) from error
     return WorkspaceResult(workspace_path=str(workspace), skills=skills)
+
+
+def progress_sender(workflow_id: str, run_id: str | None):
+    handle = activity.client().get_workflow_handle(workflow_id, run_id=run_id)
+
+    async def send(event: str) -> None:
+        await handle.signal(PROGRESS_SIGNAL_NAME, event)
+
+    return send
+
+
+@activity.defn
+async def run_agent_scan(request: AgentScanRequest) -> dict:
+    settings = get_settings()
+    if not settings.anthropic_api_key:
+        raise ApplicationError("ANTHROPIC_API_KEY is not set on the worker", type="MissingApiKey", non_retryable=True)
+    info = activity.info()
+    workspace = workspace_directory(info.workflow_id or "")
+    if not (workspace / REPO_DIRECTORY_NAME).is_dir():
+        raise ApplicationError("No cloned repository in the workspace", type="WorkspaceRepoMissing", non_retryable=True)
+
+    options = build_options(
+        workspace=workspace,
+        model=settings.anthropic_model,
+        api_key=settings.anthropic_api_key,
+        skills=available_skills(workspace / WORKSPACE_SKILLS_PATH),
+        max_turns=settings.agent_max_turns,
+        max_budget_usd=settings.agent_max_budget_usd,
+        github_token=settings.github_token,
+    )
+    scan = AgentScan(
+        options=options,
+        repo_url=request.repo_url,
+        reporter=ProgressReporter(progress_sender(info.workflow_id or "", info.workflow_run_id)),
+        heartbeat=activity.heartbeat,
+        query_function=claude_agent_sdk.query,
+    )
+
+    async def work() -> dict:
+        heartbeats = asyncio.create_task(heartbeat_forever(scan, AGENT_HEARTBEAT_INTERVAL_SECONDS))
+        try:
+            report = await scan.run()
+        finally:
+            heartbeats.cancel()
+        return report.model_dump(mode="json")
+
+    try:
+        return await run_with_clean_cancellation(work)
+    except AgentFailure as error:
+        raise ApplicationError(str(error), type=error.error_type, non_retryable=error.non_retryable) from error

@@ -100,4 +100,4 @@ def test_repair_prompt_includes_error_and_is_bounded():
 def test_prompts_have_no_em_dashes_or_emojis():
     for text in [SYSTEM_PROMPT, build_user_prompt("https://github.com/a/b"), build_repair_prompt("e")]:
         assert chr(0x2014) not in text
-        assert not re.search("[\U0001F000-\U0001FAFF☀-➿]", text)
+        assert not re.search(r"[\U0001F000-\U0001FAFF\u2600-\u27BF]", text)
