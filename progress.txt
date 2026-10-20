@@ -1,0 +1,5 @@
+US-001 Project scaffold and configuration
+Done: git repo initialized on branch ralph/temporal-repo-scanner. PRD.json renamed to prd.json to match the required layout. Created app/ package (api, workflows, activities, agent, models, config), web/, skills/, tests/, pyproject.toml with dependencies and pytest config (asyncio_mode auto, e2e marker), README.md, .gitignore. app/config.py exposes a typed pydantic Settings object loaded from the nine environment variables; blank values fall back to defaults. SCAN_ROOT defaults to <system temp>/repo-scanner.
+Installed versions: temporalio 1.34.0, claude-agent-sdk 0.2.168, fastapi 0.156.1, uvicorn 0.54.0, pydantic 2.14.1, pytest 9.1.1, pytest-asyncio 1.4.0, Python 3.12 venv via uv.
+Decisions: plain pydantic BaseModel plus explicit env mapping instead of pydantic-settings, to stay within the listed dependencies. httpx added as a dev dependency because FastAPI's TestClient requires it (needed by US-010). Install command: uv pip install -e ".[dev]".
+Unverified: nothing for this story. Claude Agent SDK runtime prerequisites are still to be confirmed and documented in README (US-007/US-013).
