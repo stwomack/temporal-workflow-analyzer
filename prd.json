@@ -220,8 +220,8 @@
         "Lists the Temporal best practices this app itself follows, each with the file that implements it"
       ],
       "priority": 13,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Verified: README has every required section, no emojis, badges, em dashes or file tree (ASCII only); the docs login text matches docs.temporal.io/with-ai; the 5 step demo was executed end to end against a local dev server."
     },
     {
       "id": "US-014",
