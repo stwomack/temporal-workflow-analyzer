@@ -3,3 +3,8 @@ Done: git repo initialized on branch ralph/temporal-repo-scanner. PRD.json renam
 Installed versions: temporalio 1.34.0, claude-agent-sdk 0.2.168, fastapi 0.156.1, uvicorn 0.54.0, pydantic 2.14.1, pytest 9.1.1, pytest-asyncio 1.4.0, Python 3.12 venv via uv.
 Decisions: plain pydantic BaseModel plus explicit env mapping instead of pydantic-settings, to stay within the listed dependencies. httpx added as a dev dependency because FastAPI's TestClient requires it (needed by US-010). Install command: uv pip install -e ".[dev]".
 Unverified: nothing for this story. Claude Agent SDK runtime prerequisites are still to be confirmed and documented in README (US-007/US-013).
+
+US-002 Data models
+Done: app/models.py defines ScanRequest, Finding, ScanReport, ScanProgress with Severity, Category and Stage enums. All models forbid extra fields. ScanReport rejects more than 7 findings, duplicate ranks, and any list not ordered by severity then rank (ranks must also increase down the list, so rank 1 is always first). Finding.file must be relative to the repo root (absolute paths, drive letters and .. segments rejected; leading ./ stripped). ScanProgress keeps only the most recent 25 events.
+Decisions: ordering is validated by rejection, not silently re-sorted, so bad agent output triggers the US-007 repair path. Length limits chosen where the PRD said only "short" or "one sentence": problem and fix 400 chars, progress message and each event 200 chars, file 300, doc_url 500, repo_url 300. Over-long event lists are trimmed to the newest 25 rather than rejected.
+Unverified: nothing for this story.

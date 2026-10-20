@@ -40,8 +40,8 @@
         "Unit tests cover ordering validation, the 7 finding cap, and field length limits"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Verified: 24 model tests pass (28 total)."
     },
     {
       "id": "US-003",
