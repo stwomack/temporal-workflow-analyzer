@@ -11,12 +11,12 @@ from temporalio.exceptions import ApplicationError
 
 from app.config import get_settings
 from app.repo_url import InvalidRepoUrlError, parse_github_repo_url
+from app.workspace import REPO_DIRECTORY_NAME, WorkspaceRepoMissingError, prepare_workspace_directory
 
 MAX_REPO_BYTES = 200 * 1024 * 1024
 MAX_REPO_FILES = 20_000
 GIT_CLONE_TIMEOUT_SECONDS = 150
 MAX_GIT_ERROR_LENGTH = 300
-REPO_DIRECTORY_NAME = "repo"
 CLONE_MARKER_NAME = "clone-complete.json"
 WORKFLOW_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
 
@@ -49,6 +49,12 @@ class CloneResult:
     clone_path: str
     file_count: int
     size_bytes: int
+
+
+@dataclass(frozen=True)
+class WorkspaceResult:
+    workspace_path: str
+    skills: list[str]
 
 
 def workspace_directory(workflow_id: str) -> Path:
@@ -207,3 +213,13 @@ async def clone_repo(request: CloneRequest) -> CloneResult:
     marker_data = {"clone_url": repo.clone_url, **asdict(result)}
     await asyncio.to_thread(marker.write_text, json.dumps(marker_data))
     return result
+
+
+@activity.defn
+async def prepare_workspace() -> WorkspaceResult:
+    workspace = workspace_directory(activity.info().workflow_id or "")
+    try:
+        skills = await asyncio.to_thread(prepare_workspace_directory, workspace)
+    except WorkspaceRepoMissingError as error:
+        raise ApplicationError(str(error), type="WorkspaceRepoMissing", non_retryable=True) from error
+    return WorkspaceResult(workspace_path=str(workspace), skills=skills)

@@ -86,8 +86,8 @@
         "Unit test confirms layout and idempotency"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": "Confirm from the installed claude-agent-sdk documentation that setting_sources=[\"project\"] discovers skills in <cwd>/.claude/skills and that the Skill tool must be in the allowed tools list."
+      "passes": true,
+      "notes": "Verified: 9 workspace tests pass (111 total), including layout, fresh-copy idempotency, missing critic skill warning, and the prepare_workspace activity under ActivityEnvironment."
     },
     {
       "id": "US-006",
