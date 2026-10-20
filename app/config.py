@@ -21,6 +21,7 @@ class Settings(BaseModel):
     worker_max_concurrent_activities: int = 2
     worker_shutdown_grace_seconds: float = 30.0
     temporal_ui_url: str = "http://localhost:8233"
+    worker_host_id: str | None = None
 
 
 ENVIRONMENT_VARIABLES = {
@@ -38,6 +39,7 @@ ENVIRONMENT_VARIABLES = {
     "worker_max_concurrent_activities": "WORKER_MAX_CONCURRENT_ACTIVITIES",
     "worker_shutdown_grace_seconds": "WORKER_SHUTDOWN_GRACE_SECONDS",
     "temporal_ui_url": "TEMPORAL_UI_URL",
+    "worker_host_id": "WORKER_HOST_ID",
 }
 
 

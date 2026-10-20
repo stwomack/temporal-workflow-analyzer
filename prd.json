@@ -233,8 +233,8 @@
         "All tests pass after fixes"
       ],
       "priority": 14,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Verified: self-scan found 1 high (worker-local disk without worker-specific task queues), fixed with host task queues; rescan reports only 3 mediums. 209 tests pass plus the live e2e test."
     }
   ]
 }

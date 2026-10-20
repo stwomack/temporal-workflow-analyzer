@@ -274,10 +274,15 @@ async def test_api_against_test_environment():
             return env.client
 
         app = create_app(factory, load_settings({"TASK_QUEUE": task_queue}))
+        @activity.defn(name="get_worker_task_queue")
+        async def get_worker_task_queue() -> str:
+            return f"{task_queue}-host"
+
         async with Worker(
+            env.client, task_queue=task_queue, workflows=[RepoScanWorkflow], activities=[get_worker_task_queue]
+        ), Worker(
             env.client,
-            task_queue=task_queue,
-            workflows=[RepoScanWorkflow],
+            task_queue=f"{task_queue}-host",
             activities=[clone_repo, prepare_workspace, run_agent_scan, cleanup_workspace],
             max_heartbeat_throttle_interval=MAX_HEARTBEAT_THROTTLE,
         ), app.router.lifespan_context(app):

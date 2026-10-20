@@ -2,12 +2,14 @@ from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ActivityError, ApplicationError, is_cancelled_exception
+from temporalio.exceptions import TimeoutError as ActivityTimeoutError
+from temporalio.exceptions import ActivityError, ApplicationError, TimeoutType, is_cancelled_exception
 
 with workflow.unsafe.imports_passed_through():
     import annotated_types
     import pydantic
     from app.activities import (
+        WORKER_QUEUE_ACTIVITY_NAME,
         AgentScanRequest,
         CloneRequest,
         cleanup_workspace,
@@ -25,6 +27,11 @@ with workflow.unsafe.imports_passed_through():
         Stage,
     )
 
+CLAIM_TIMEOUT = timedelta(seconds=30)
+CLAIM_RETRY = RetryPolicy(maximum_attempts=3)
+HOST_SCHEDULE_TO_START = timedelta(minutes=10)
+CLEANUP_SCHEDULE_TO_START = timedelta(minutes=1)
+MAX_HOST_ATTEMPTS = 3
 CLONE_TIMEOUT = timedelta(minutes=3)
 CLONE_RETRY = RetryPolicy(
     maximum_attempts=3,
@@ -60,6 +67,14 @@ def describe_failure(error: BaseException) -> str:
     return message[:MAX_MESSAGE_LENGTH]
 
 
+def is_host_unavailable(error: BaseException) -> bool:
+    return (
+        isinstance(error, ActivityError)
+        and isinstance(error.cause, ActivityTimeoutError)
+        and error.cause.type == TimeoutType.SCHEDULE_TO_START
+    )
+
+
 def failure_type(error: BaseException) -> str:
     cause = error.cause if isinstance(error, ActivityError) and error.cause else error
     if isinstance(cause, ApplicationError) and cause.type:
@@ -73,6 +88,7 @@ class RepoScanWorkflow:
         self.stage = Stage.queued
         self.message = "Waiting for a worker"
         self.events: list[str] = []
+        self.host_queue: str | None = None
 
     def set_stage(self, stage: Stage, message: str) -> None:
         self.stage = stage
@@ -90,7 +106,7 @@ class RepoScanWorkflow:
     @workflow.run
     async def run(self, request: ScanRequest) -> dict:
         try:
-            return await self.scan(request)
+            return await self.scan_on_any_host(request)
         except BaseException as error:
             if is_cancelled_exception(error):
                 self.set_stage(Stage.cancelled, "Scan cancelled")
@@ -102,17 +118,38 @@ class RepoScanWorkflow:
         finally:
             await self.cleanup()
 
-    async def scan(self, request: ScanRequest) -> dict:
+    async def scan_on_any_host(self, request: ScanRequest) -> dict:
+        for attempt in range(1, MAX_HOST_ATTEMPTS + 1):
+            self.host_queue = await workflow.execute_activity(
+                WORKER_QUEUE_ACTIVITY_NAME,
+                start_to_close_timeout=CLAIM_TIMEOUT,
+                retry_policy=CLAIM_RETRY,
+                result_type=str,
+            )
+            try:
+                return await self.scan(request, self.host_queue)
+            except ActivityError as error:
+                if not is_host_unavailable(error) or attempt == MAX_HOST_ATTEMPTS:
+                    raise
+                workflow.logger.warning("Worker queue %s is unavailable, moving the scan to another worker", self.host_queue)
+                self.events.append("worker unavailable, restarting scan on another worker")
+        raise ApplicationError("No worker was available to run the scan", type="NoWorkerAvailable", non_retryable=True)
+
+    async def scan(self, request: ScanRequest, host_queue: str) -> dict:
         self.set_stage(Stage.cloning, "Cloning repository")
         clone = await workflow.execute_activity(
             clone_repo,
             CloneRequest(repo_url=request.repo_url),
+            task_queue=host_queue,
+            schedule_to_start_timeout=HOST_SCHEDULE_TO_START,
             start_to_close_timeout=CLONE_TIMEOUT,
             retry_policy=CLONE_RETRY,
         )
         self.set_stage(Stage.preparing, f"Preparing workspace for {clone.file_count} files")
         await workflow.execute_activity(
             prepare_workspace,
+            task_queue=host_queue,
+            schedule_to_start_timeout=HOST_SCHEDULE_TO_START,
             start_to_close_timeout=PREPARE_TIMEOUT,
             retry_policy=PREPARE_RETRY,
         )
@@ -120,6 +157,8 @@ class RepoScanWorkflow:
         raw_report = await workflow.execute_activity(
             run_agent_scan,
             AgentScanRequest(repo_url=request.repo_url),
+            task_queue=host_queue,
+            schedule_to_start_timeout=HOST_SCHEDULE_TO_START,
             start_to_close_timeout=AGENT_TIMEOUT,
             heartbeat_timeout=AGENT_HEARTBEAT_TIMEOUT,
             retry_policy=AGENT_RETRY,
@@ -131,9 +170,13 @@ class RepoScanWorkflow:
         return report.model_dump(mode="json")
 
     async def cleanup(self) -> None:
+        if self.host_queue is None:
+            return
         try:
             await workflow.execute_activity(
                 cleanup_workspace,
+                task_queue=self.host_queue,
+                schedule_to_start_timeout=CLEANUP_SCHEDULE_TO_START,
                 start_to_close_timeout=CLEANUP_TIMEOUT,
                 retry_policy=CLEANUP_RETRY,
             )

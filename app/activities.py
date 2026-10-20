@@ -36,6 +36,7 @@ MAX_GIT_ERROR_LENGTH = 300
 CLONE_MARKER_NAME = "clone-complete.json"
 WORKFLOW_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
 AGENT_HEARTBEAT_INTERVAL_SECONDS = 10.0
+WORKER_QUEUE_ACTIVITY_NAME = "get_worker_task_queue"
 
 NOT_FOUND_MARKERS = (
     "repository not found",
@@ -303,3 +304,12 @@ async def cleanup_workspace() -> bool:
     existed = await asyncio.to_thread(workspace.exists)
     await asyncio.to_thread(remove_path, workspace)
     return existed
+
+
+class WorkerQueueActivities:
+    def __init__(self, host_task_queue: str):
+        self.host_task_queue = host_task_queue
+
+    @activity.defn(name=WORKER_QUEUE_ACTIVITY_NAME)
+    async def get_worker_task_queue(self) -> str:
+        return self.host_task_queue

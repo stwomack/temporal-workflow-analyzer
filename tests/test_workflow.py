@@ -1,7 +1,9 @@
 import asyncio
 import shutil
+from contextlib import asynccontextmanager
 import uuid
 from collections import Counter
+from datetime import timedelta
 
 import pytest
 import pytest_asyncio
@@ -10,10 +12,12 @@ from temporalio.client import Client, WorkflowFailureError
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.exceptions import ApplicationError, CancelledError
 from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import Replayer, Worker
+from temporalio.api.enums.v1 import TimeoutType
+from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from app.activities import AgentScanRequest, CloneRequest, CloneResult, WorkspaceResult
 from app.models import PROGRESS_SIGNAL_NAME, ScanProgress, ScanReport, ScanRequest, Stage
+from app import workflows as workflows_module
 from app.workflows import RepoScanWorkflow
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -97,8 +101,23 @@ class MockActivities:
         return [clone_repo, prepare_workspace, run_agent_scan, cleanup_workspace]
 
 
-def worker(client: Client, mocks: MockActivities, task_queue: str) -> Worker:
-    return Worker(client, task_queue=task_queue, workflows=[RepoScanWorkflow], activities=mocks.activities())
+@asynccontextmanager
+async def worker(
+    client: Client, mocks: MockActivities, task_queue: str, dead_queues: list[str] | None = None, sandboxed: bool = True
+):
+    host_queue = f"{task_queue}-host"
+    pending_dead = list(dead_queues or [])
+
+    @activity.defn(name="get_worker_task_queue")
+    async def get_worker_task_queue() -> str:
+        mocks.calls["get_worker_task_queue"] += 1
+        return pending_dead.pop(0) if pending_dead else host_queue
+
+    runner = {} if sandboxed else {"workflow_runner": UnsandboxedWorkflowRunner()}
+    async with Worker(
+        client, task_queue=task_queue, workflows=[RepoScanWorkflow], activities=[get_worker_task_queue], **runner
+    ), Worker(client, task_queue=host_queue, activities=mocks.activities()):
+        yield host_queue
 
 
 async def start(client: Client, task_queue: str):
@@ -124,7 +143,9 @@ async def test_success_runs_activities_in_order_and_cleans_up(env):
 
     assert ScanReport.model_validate(result).findings[0].title == "No timeout"
     assert isinstance(result, dict)
-    assert mocks.calls == Counter(clone_repo=1, prepare_workspace=1, run_agent_scan=1, cleanup_workspace=1)
+    assert mocks.calls == Counter(
+        get_worker_task_queue=1, clone_repo=1, prepare_workspace=1, run_agent_scan=1, cleanup_workspace=1
+    )
     assert state.stage is Stage.done
 
     history = await handle.fetch_history()
@@ -133,14 +154,14 @@ async def test_success_runs_activities_in_order_and_cleans_up(env):
         for event in history.events
         if event.HasField("activity_task_scheduled_event_attributes")
     ]
-    assert scheduled == ["clone_repo", "prepare_workspace", "run_agent_scan", "cleanup_workspace"]
+    assert scheduled == ["get_worker_task_queue", "clone_repo", "prepare_workspace", "run_agent_scan", "cleanup_workspace"]
     await Replayer(workflows=[RepoScanWorkflow], data_converter=pydantic_data_converter).replay_workflow(history)
 
 
 async def test_activity_options_match_requirements(env):
     mocks = MockActivities()
     task_queue = str(uuid.uuid4())
-    async with worker(env.client, mocks, task_queue):
+    async with worker(env.client, mocks, task_queue) as host_queue:
         handle = await start(env.client, task_queue)
         await handle.result()
     history = await handle.fetch_history()
@@ -149,6 +170,14 @@ async def test_activity_options_match_requirements(env):
         for event in history.events
         if event.HasField("activity_task_scheduled_event_attributes")
     }
+    claim = options["get_worker_task_queue"]
+    assert claim.task_queue.name == task_queue
+    assert claim.start_to_close_timeout.ToSeconds() == 30
+    for name in ["clone_repo", "prepare_workspace", "run_agent_scan", "cleanup_workspace"]:
+        assert options[name].task_queue.name == host_queue
+    for name in ["clone_repo", "prepare_workspace", "run_agent_scan"]:
+        assert options[name].schedule_to_start_timeout.ToSeconds() == 600
+    assert options["cleanup_workspace"].schedule_to_start_timeout.ToSeconds() == 60
     clone = options["clone_repo"]
     assert clone.start_to_close_timeout.ToSeconds() == 180
     assert clone.retry_policy.maximum_attempts == 3
@@ -268,3 +297,35 @@ async def test_signals_update_progress_and_keep_latest_25(env):
         final = await progress(handle)
     assert final.stage is Stage.done
     assert final.events[-1] == "event 29"
+
+
+async def test_dead_worker_queue_moves_scan_to_another_worker(env, monkeypatch):
+    monkeypatch.setattr(workflows_module, "HOST_SCHEDULE_TO_START", timedelta(seconds=2))
+    mocks = MockActivities()
+    task_queue = str(uuid.uuid4())
+    async with worker(env.client, mocks, task_queue, dead_queues=[f"{task_queue}-dead"], sandboxed=False):
+        handle = await start(env.client, task_queue)
+        result = await asyncio.wait_for(handle.result(), timeout=30)
+        state = await progress(handle)
+    history = await handle.fetch_history()
+
+    assert ScanReport.model_validate(result).findings
+    assert mocks.calls["get_worker_task_queue"] == 2
+    assert mocks.calls["clone_repo"] == 1
+    assert "worker unavailable, restarting scan on another worker" in state.events
+    timed_out = [
+        event.activity_task_timed_out_event_attributes.failure.timeout_failure_info.timeout_type
+        for event in history.events
+        if event.HasField("activity_task_timed_out_event_attributes")
+    ]
+    assert timed_out == [TimeoutType.TIMEOUT_TYPE_SCHEDULE_TO_START]
+
+
+async def test_non_retryable_failure_is_not_moved_to_another_worker(env):
+    mocks = MockActivities(clone_error=ApplicationError("nope", type="RepoNotFound"))
+    task_queue = str(uuid.uuid4())
+    async with worker(env.client, mocks, task_queue):
+        handle = await start(env.client, task_queue)
+        with pytest.raises(WorkflowFailureError):
+            await handle.result()
+    assert mocks.calls["get_worker_task_queue"] == 1

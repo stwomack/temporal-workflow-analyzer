@@ -17,7 +17,7 @@ from temporalio.testing import WorkflowEnvironment
 from app import temporal_client
 from app.config import load_settings
 from app.models import ScanRequest, Stage
-from app.worker import ACTIVITIES, build_worker, remove_stale_scans
+from app.worker import ACTIVITIES, build_workers, host_task_queue, remove_stale_scans
 from app.workflows import RepoScanWorkflow
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -76,20 +76,31 @@ async def env():
         yield environment
 
 
-async def test_build_worker_registers_everything_with_limits(env):
+async def test_build_workers_split_shared_and_host_queues(env):
     settings = load_settings({"TASK_QUEUE": "custom-queue", "WORKER_MAX_CONCURRENT_ACTIVITIES": "3",
-                              "WORKER_SHUTDOWN_GRACE_SECONDS": "12"})
-    worker = build_worker(env.client, settings)
-    config = worker.config()
-    assert config["task_queue"] == "custom-queue"
-    assert config["workflows"] == [RepoScanWorkflow]
-    assert config["activities"] == ACTIVITIES
+                              "WORKER_SHUTDOWN_GRACE_SECONDS": "12", "WORKER_HOST_ID": "build host.local"})
+    shared, host = build_workers(env.client, settings)
+    shared_config = shared.config()
+    host_config = host.config()
+    assert shared_config["task_queue"] == "custom-queue"
+    assert shared_config["workflows"] == [RepoScanWorkflow]
+    assert [activity.__name__ for activity in shared_config["activities"]] == ["get_worker_task_queue"]
+    assert host_config["task_queue"] == "custom-queue-host-build-host.local"
+    assert host_config["workflows"] == []
+    assert host_config["activities"] == ACTIVITIES
     assert {activity.__name__ for activity in ACTIVITIES} == {
         "clone_repo", "prepare_workspace", "run_agent_scan", "cleanup_workspace"
     }
-    assert config["max_concurrent_activities"] == 3
-    assert config["graceful_shutdown_timeout"].total_seconds() == 12
-    assert config["max_heartbeat_throttle_interval"].total_seconds() == 5
+    assert host_config["max_concurrent_activities"] == 3
+    assert host_config["graceful_shutdown_timeout"].total_seconds() == 12
+    assert shared_config["graceful_shutdown_timeout"].total_seconds() == 12
+    assert host_config["max_heartbeat_throttle_interval"].total_seconds() == 5
+    assert await shared_config["activities"][0]() == "custom-queue-host-build-host.local"
+
+
+def test_host_queue_defaults_to_hostname(monkeypatch):
+    monkeypatch.setattr("socket.gethostname", lambda: "worker-7")
+    assert host_task_queue(load_settings({})) == "repo-scanner-host-worker-7"
 
 
 def test_default_concurrency_is_two():
@@ -136,6 +147,7 @@ async def test_worker_process_runs_scans_and_shuts_down_gracefully(env, tmp_path
     )
     try:
         startup = await wait_for_line(process, "Worker polling task queue", timeout=30)
+        assert f"host queue {task_queue}-host-" in startup
         assert "Removed 1 stale scan directories" in startup
         assert not stale.exists()
 

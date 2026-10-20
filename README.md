@@ -16,7 +16,9 @@ Findings are ranked by severity, then by blast radius:
 
 The FastAPI app serves the web page and three endpoints, and starts one RepoScanWorkflow per scan. A worker process runs the workflow and its activities.
 
-RepoScanWorkflow runs three activities in order and always runs a cleanup activity afterward:
+Each worker process polls two task queues: the shared TASK_QUEUE, for workflows and a small get_worker_task_queue activity, and its own host queue, <TASK_QUEUE>-host-<WORKER_HOST_ID>, for the activities that touch local disk. The workflow first calls get_worker_task_queue on the shared queue, and whichever worker answers becomes the host for that scan. Every later activity runs on that host's queue with a 10 minute schedule_to_start timeout. If the host dies, that timeout fires (it is never retried), and the workflow claims a new host and starts the sequence again there, up to three hosts.
+
+On the host queue, RepoScanWorkflow runs three activities in order and always runs a cleanup activity afterward:
 
 1. clone_repo makes a shallow, submodule-free clone into SCAN_ROOT/<workflow id>/repo and enforces size limits (200 MB, 20000 files).
 2. prepare_workspace copies the vendored skills into SCAN_ROOT/<workflow id>/.claude/skills.
@@ -90,9 +92,9 @@ Open http://localhost:8000, paste a repository URL such as https://github.com/st
 
 ### Worker
 
-The worker connects to TEMPORAL_ADDRESS and TEMPORAL_NAMESPACE (with TLS and TEMPORAL_API_KEY when that key is set), registers RepoScanWorkflow and its four activities on TASK_QUEUE, and removes scan directories under SCAN_ROOT older than one hour. It runs at most WORKER_MAX_CONCURRENT_ACTIVITIES activities at once (default 2) because each scan is CPU, memory and cost heavy. SIGINT or SIGTERM stops polling and gives running activities WORKER_SHUTDOWN_GRACE_SECONDS (default 30) to finish.
+The worker connects to TEMPORAL_ADDRESS and TEMPORAL_NAMESPACE (with TLS and TEMPORAL_API_KEY when that key is set), registers RepoScanWorkflow and get_worker_task_queue on TASK_QUEUE and the four scan activities on its host queue, and removes scan directories under SCAN_ROOT older than one hour. It runs at most WORKER_MAX_CONCURRENT_ACTIVITIES activities at once (default 2) because each scan is CPU, memory and cost heavy. SIGINT or SIGTERM stops polling and gives running activities WORKER_SHUTDOWN_GRACE_SECONDS (default 30) to finish.
 
-The clone, prepare, scan and cleanup activities share the local disk under SCAN_ROOT, so the demo runs a single worker process. To scale out, every activity of one scan must run on the same machine. Two ways to do that: give each worker its own task queue and have the workflow route the later activities to the queue of the worker that cloned the repo, or merge clone, prepare and scan into one activity so the disk state never crosses activity boundaries.
+The clone, prepare, scan and cleanup activities share the local disk under SCAN_ROOT, which is why they run on a host queue. To scale out, start more worker processes on other machines; each gets its own host queue from its hostname. The host queue name comes from WORKER_HOST_ID, which defaults to the hostname, so a worker restarted on the same machine picks up the same queue and can resume a scan whose files are still on disk. Workers on one machine that share SCAN_ROOT may share a host id; workers that do not share a disk must have different host ids.
 
 ### API
 
@@ -114,8 +116,8 @@ This shows durability and cancellation with the three terminals from Running loc
 
 1. Start a scan. In the web page, scan https://github.com/stwomack/bad-temporal-workflow. Open the Temporal UI link and watch clone_repo and prepare_workspace complete and run_agent_scan start.
 2. Kill the worker mid-scan. Once the progress feed shows events, find the worker's process id with `pgrep -f app.worker` and run `kill -9` on it. The page switches to queued with "Waiting for a worker", because queries need a running worker, while the Temporal UI still shows the workflow as Running with run_agent_scan pending.
-3. Restart the worker with `uv run python -m app.worker`. The workflow does not clone or prepare again; those results come from history. As soon as the 60 second heartbeat timeout of the lost attempt has expired, Temporal hands run_agent_scan attempt 2 to the new worker, and the page goes back to scanning.
-4. Watch it finish. The progress feed fills again, the stage moves to done, and the ranked findings appear. The workflow history shows clone_repo and prepare_workspace once each, run_agent_scan with its started event at attempt 2, and cleanup_workspace at the end.
+3. Restart the worker with `uv run python -m app.worker` within 10 minutes. It polls the same host queue because the host id is still the hostname. The workflow does not clone or prepare again; those results come from history. As soon as the 60 second heartbeat timeout of the lost attempt has expired, Temporal hands run_agent_scan attempt 2 to the new worker, and the page goes back to scanning.
+4. Watch it finish. The progress feed fills again, the stage moves to done, and the ranked findings appear. The workflow history shows get_worker_task_queue, clone_repo and prepare_workspace once each, run_agent_scan with its started event at attempt 2, and cleanup_workspace at the end.
 5. Show cancellation. Start a second scan, wait until the progress feed shows events, and press Cancel. Within about 15 seconds the agent subprocess stops, cleanup_workspace runs, and the page shows Scan cancelled. In the Temporal UI the workflow status is Canceled and the last activity is cleanup_workspace.
 
 These steps were run end to end against a local dev server: the killed scan resumed on the restarted worker and finished with 7 findings, and the cancelled scan reached Scan cancelled 11 seconds after Cancel with no agent processes or scan directories left behind.
@@ -138,6 +140,7 @@ These steps were run end to end against a local dev server: the killed scan resu
 | AGENT_MAX_BUDGET_USD | 5.0 | Spend limit for one agent run |
 | WORKER_MAX_CONCURRENT_ACTIVITIES | 2 | Activities one worker runs at once |
 | WORKER_SHUTDOWN_GRACE_SECONDS | 30 | Time running activities get on shutdown |
+| WORKER_HOST_ID | the hostname | Names this worker's host task queue; must differ between workers that do not share SCAN_ROOT |
 
 ## Running tests
 
@@ -169,13 +172,14 @@ DEMO_REPO_URL=https://github.com/stwomack/bad-temporal-workflow uv run pytest -m
 | Clean cancellation: the agent runs under a cancel scope that terminates the CLI subprocess, the workflow waits for that, then always runs cleanup | app/agent/runner.py, app/workflows.py |
 | Progress through signals and state through a query, keeping only the latest 25 events | app/workflows.py |
 | Activities send signals with the worker's own client from activity.client() instead of opening new connections | app/activities.py |
+| Worker-specific host task queues with a schedule_to_start timeout, and the whole sequence restarted on another host when a host disappears | app/workflows.py, app/worker.py |
 | Bounded worker concurrency and graceful shutdown on SIGINT and SIGTERM | app/worker.py |
 | One Temporal client per process with the pydantic data converter | app/temporal_client.py, app/api.py |
 | Untrusted input validated before it reaches git: an allowlist URL parser and git run with an argument list, a hard timeout and symlinks disabled | app/repo_url.py, app/activities.py |
 
 ## Known limitations
 
-- One worker process. The activities of a scan share local disk, so scans only work when one worker handles all of them. See the Worker section for how to scale out.
+- A scan whose activities wait on a busy host's queue for more than 10 minutes (for example a third scan queued behind two long agent runs on a worker limited to 2 activities) is treated as a dead host and restarted on another host, up to three times.
 - Killing the worker with kill -9 loses the running agent attempt. Temporal retries it after the 60 second heartbeat timeout, and run_agent_scan has at most two attempts, so a second crash fails the scan. The orphaned Claude Code CLI process outlives the worker for a few seconds until its pipe closes; in testing it exited within about 10 seconds.
 - While no worker is running, the page shows queued with "Waiting for a worker" even for a scan that was mid-way, because the progress query needs a worker.
 - A cancel during clone_repo waits for the clone to finish or hit its 150 second git timeout, because clone_repo does not heartbeat.

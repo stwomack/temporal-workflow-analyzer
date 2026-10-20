@@ -7,7 +7,7 @@ from app.api import new_scan_id
 from app.config import Settings
 from app.models import ScanProgress, ScanReport, ScanRequest, Stage
 from app.repo_url import parse_github_repo_url
-from app.worker import build_worker
+from app.worker import running_workers
 from app.workflows import RepoScanWorkflow
 
 POLL_INTERVAL_SECONDS = 1.5
@@ -52,7 +52,7 @@ async def run_with_embedded_worker(
     repo_url: str,
     on_progress: Callable[[ScanProgress], None] | None = None,
 ) -> ScanReport:
-    async with build_worker(client, settings):
+    async with running_workers(client, settings):
         return await run_scan(client, repo_url, settings.task_queue, on_progress)
 
 
