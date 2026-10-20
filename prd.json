@@ -72,8 +72,8 @@
         "Unit tests cover idempotency, the limits, and error type mapping using a local temporary git repository as the source"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Verified: 23 clone tests pass against a local git source via GIT_CONFIG insteadOf; real GitHub checked manually for a missing repo (RepoNotFound) and octocat/Hello-World (success)."
     },
     {
       "id": "US-005",
