@@ -17,6 +17,8 @@ def test_defaults_when_environment_is_empty():
     assert settings.demo_repo_url is None
     assert settings.agent_max_turns == 40
     assert settings.agent_max_budget_usd == 5.0
+    assert settings.worker_max_concurrent_activities == 2
+    assert settings.worker_shutdown_grace_seconds == 30.0
 
 
 def test_every_variable_is_read_from_environment():

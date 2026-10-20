@@ -18,6 +18,8 @@ class Settings(BaseModel):
     demo_repo_url: str | None = None
     agent_max_turns: int = 40
     agent_max_budget_usd: float = 5.0
+    worker_max_concurrent_activities: int = 2
+    worker_shutdown_grace_seconds: float = 30.0
 
 
 ENVIRONMENT_VARIABLES = {
@@ -32,6 +34,8 @@ ENVIRONMENT_VARIABLES = {
     "demo_repo_url": "DEMO_REPO_URL",
     "agent_max_turns": "AGENT_MAX_TURNS",
     "agent_max_budget_usd": "AGENT_MAX_BUDGET_USD",
+    "worker_max_concurrent_activities": "WORKER_MAX_CONCURRENT_ACTIVITIES",
+    "worker_shutdown_grace_seconds": "WORKER_SHUTDOWN_GRACE_SECONDS",
 }
 
 

@@ -157,8 +157,8 @@
         "README documents that clone and scan activities share local disk, so the demo runs a single worker process, and what would change to scale out (for example a worker specific task queue or a single combined activity)"
       ],
       "priority": 9,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Verified: 8 worker tests pass (163 total), including a real python -m app.worker subprocess against a local dev server that removes a stale scan dir, executes a scan to a failed state, and exits 0 on SIGTERM and SIGINT."
     },
     {
       "id": "US-010",
