@@ -16,6 +16,7 @@ from app.workflows import RepoScanWorkflow
 from app.workspace import warn_about_missing_skills
 
 STALE_SCAN_AGE_SECONDS = 60 * 60
+MAX_HEARTBEAT_THROTTLE = timedelta(seconds=5)
 ACTIVITIES = [clone_repo, prepare_workspace, run_agent_scan, cleanup_workspace]
 
 logger = logging.getLogger("app.worker")
@@ -41,6 +42,7 @@ def build_worker(client: Client, settings: Settings) -> Worker:
         activities=ACTIVITIES,
         max_concurrent_activities=settings.worker_max_concurrent_activities,
         graceful_shutdown_timeout=timedelta(seconds=settings.worker_shutdown_grace_seconds),
+        max_heartbeat_throttle_interval=MAX_HEARTBEAT_THROTTLE,
     )
 
 

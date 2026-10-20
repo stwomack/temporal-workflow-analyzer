@@ -174,8 +174,8 @@
         "Tests use FastAPI's test client with a fake or test environment Temporal client"
       ],
       "priority": 10,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Verified: 20 API tests pass (183 total): FastAPI TestClient with a fake Temporal client for every endpoint and state, plus one httpx ASGI test against a local dev server and worker with mocked activities covering done, failed and cancelled."
     },
     {
       "id": "US-011",

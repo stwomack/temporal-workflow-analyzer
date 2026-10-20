@@ -89,6 +89,7 @@ async def test_build_worker_registers_everything_with_limits(env):
     }
     assert config["max_concurrent_activities"] == 3
     assert config["graceful_shutdown_timeout"].total_seconds() == 12
+    assert config["max_heartbeat_throttle_interval"].total_seconds() == 5
 
 
 def test_default_concurrency_is_two():

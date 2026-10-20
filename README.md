@@ -36,9 +36,23 @@ The worker connects to TEMPORAL_ADDRESS and TEMPORAL_NAMESPACE (with TLS and TEM
 
 The clone, prepare, scan and cleanup activities share the local disk under SCAN_ROOT, so the demo runs a single worker process. To scale out, every activity of one scan must run on the same machine. Two ways to do that: give each worker its own task queue and have the workflow route the later activities to the queue of the worker that cloned the repo, or merge clone, prepare and scan into one activity so the disk state never crosses activity boundaries.
 
+## API and web page
+
+Start the API and web page with:
+
+```
+uv run uvicorn app.api:app --port 8000
+```
+
+Then open http://localhost:8000. The API creates one Temporal client at startup and reuses it.
+
+- POST /api/scans with {"repo_url": "https://github.com/owner/repo"} validates the URL and starts RepoScanWorkflow with id scan-<owner>-<repo>-<8 hex chars>. It returns scan_id and temporal_ui_url (built from TEMPORAL_UI_URL, default http://localhost:8233). An invalid URL returns 422 with a message.
+- GET /api/scans/{scan_id} returns stage, message, recent events, and once complete the report. Failed and cancelled scans include an error message.
+- POST /api/scans/{scan_id}/cancel requests cancellation.
+
 ## Configuration
 
-All configuration comes from environment variables: ANTHROPIC_API_KEY, ANTHROPIC_MODEL, TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE, TEMPORAL_API_KEY, TASK_QUEUE, SCAN_ROOT, GITHUB_TOKEN, DEMO_REPO_URL, AGENT_MAX_TURNS (default 40), AGENT_MAX_BUDGET_USD (default 5.0), WORKER_MAX_CONCURRENT_ACTIVITIES (default 2) and WORKER_SHUTDOWN_GRACE_SECONDS (default 30). See app/config.py for defaults.
+All configuration comes from environment variables: ANTHROPIC_API_KEY, ANTHROPIC_MODEL, TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE, TEMPORAL_API_KEY, TASK_QUEUE, SCAN_ROOT, GITHUB_TOKEN, DEMO_REPO_URL, AGENT_MAX_TURNS (default 40), AGENT_MAX_BUDGET_USD (default 5.0), WORKER_MAX_CONCURRENT_ACTIVITIES (default 2) and WORKER_SHUTDOWN_GRACE_SECONDS (default 30) and TEMPORAL_UI_URL (default http://localhost:8233). See app/config.py for defaults.
 
 ## Running tests
 

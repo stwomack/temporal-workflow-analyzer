@@ -20,6 +20,7 @@ class Settings(BaseModel):
     agent_max_budget_usd: float = 5.0
     worker_max_concurrent_activities: int = 2
     worker_shutdown_grace_seconds: float = 30.0
+    temporal_ui_url: str = "http://localhost:8233"
 
 
 ENVIRONMENT_VARIABLES = {
@@ -36,6 +37,7 @@ ENVIRONMENT_VARIABLES = {
     "agent_max_budget_usd": "AGENT_MAX_BUDGET_USD",
     "worker_max_concurrent_activities": "WORKER_MAX_CONCURRENT_ACTIVITIES",
     "worker_shutdown_grace_seconds": "WORKER_SHUTDOWN_GRACE_SECONDS",
+    "temporal_ui_url": "TEMPORAL_UI_URL",
 }
 
 
