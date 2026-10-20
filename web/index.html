@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Temporal Repo Scanner</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f7f7f8;
+  --panel: #ffffff;
+  --text: #1b1d22;
+  --muted: #5d6270;
+  --border: #dcdee3;
+  --accent: #3b4fd8;
+  --accent-text: #ffffff;
+  --critical-bg: #fde3e3;
+  --critical-text: #9b1c1c;
+  --high-bg: #fff0d6;
+  --high-text: #8a4b00;
+  --medium-bg: #e4ecfb;
+  --medium-text: #234a9b;
+  --error-bg: #fdeaea;
+  --error-border: #e4a3a3;
+  --error-text: #8c1d1d;
+  --code-bg: #eef0f3;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121317;
+    --panel: #1b1d23;
+    --text: #e8e9ed;
+    --muted: #a0a5b3;
+    --border: #2f323b;
+    --accent: #7d8cff;
+    --accent-text: #0e1020;
+    --critical-bg: #4a1c1f;
+    --critical-text: #ffb4b4;
+    --high-bg: #45320f;
+    --high-text: #ffd28a;
+    --medium-bg: #1d2c4d;
+    --medium-text: #a9c3ff;
+    --error-bg: #3a1a1c;
+    --error-border: #7a3236;
+    --error-text: #ffc2c2;
+    --code-bg: #262932;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 1.6rem; margin: 0 0 4px; }
+.lead { color: var(--muted); margin: 0 0 24px; }
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+form { display: flex; gap: 8px; flex-wrap: wrap; }
+label.visually-hidden {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);
+}
+input[type="url"] {
+  flex: 1 1 320px;
+  min-width: 0;
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+button {
+  padding: 10px 18px;
+  font: inherit;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+  cursor: pointer;
+}
+button.secondary { background: transparent; color: var(--text); border-color: var(--border); }
+button:disabled { opacity: 0.6; cursor: not-allowed; }
+[hidden] { display: none !important; }
+.status-line { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.stage {
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--code-bg);
+}
+.muted { color: var(--muted); }
+a { color: var(--accent); }
+#events { list-style: none; margin: 12px 0 0; padding: 0; max-height: 220px; overflow-y: auto; }
+#events li {
+  font: 0.85rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: 2px 0;
+  border-bottom: 1px solid var(--border);
+  word-break: break-word;
+}
+.error {
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  color: var(--error-text);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 20px;
+}
+.error strong { display: block; margin-bottom: 2px; }
+h2 { font-size: 1.15rem; margin: 24px 0 12px; }
+.languages { margin: 0 0 4px; }
+.summary { margin: 0; }
+.findings { list-style: none; margin: 0; padding: 0; }
+.finding {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+.finding-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.rank { font-weight: 700; color: var(--muted); }
+.title { font-weight: 600; }
+.severity {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+.severity-critical { background: var(--critical-bg); color: var(--critical-text); }
+.severity-high { background: var(--high-bg); color: var(--high-text); }
+.severity-medium { background: var(--medium-bg); color: var(--medium-text); }
+.location {
+  display: inline-block;
+  margin: 6px 0;
+  font: 0.85rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  word-break: break-all;
+}
+.finding p { margin: 4px 0; }
+.label { font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Temporal Repo Scanner</h1>
+  <p class="lead">Paste a public GitHub repository URL to get a short, ranked list of Temporal best practice problems to fix.</p>
+
+  <section class="panel">
+    <form id="scan-form" novalidate>
+      <label class="visually-hidden" for="repo-url">GitHub repository URL</label>
+      <input id="repo-url" name="repo_url" type="url" placeholder="https://github.com/owner/repo" autocomplete="off" spellcheck="false" required>
+      <button id="scan-button" type="submit">Scan</button>
+      <button id="cancel-button" type="button" class="secondary" hidden>Cancel</button>
+    </form>
+  </section>
+
+  <div id="error" class="error" role="alert" hidden>
+    <strong id="error-title"></strong>
+    <span id="error-message"></span>
+  </div>
+
+  <section id="progress" class="panel" hidden aria-live="polite">
+    <div class="status-line">
+      <span id="stage" class="stage"></span>
+      <span id="message"></span>
+      <a id="temporal-link" href="#" target="_blank" rel="noopener noreferrer" hidden>View in Temporal UI</a>
+    </div>
+    <ul id="events"></ul>
+  </section>
+
+  <section id="results" hidden>
+    <div class="panel">
+      <p class="languages"><span class="label">Detected languages:</span> <span id="languages"></span></p>
+      <p id="summary" class="summary"></p>
+      <p id="truncated" class="muted" hidden>More issues exist than are listed here. These are the most important ones.</p>
+    </div>
+    <div id="first-group" hidden>
+      <h2>Fix these first</h2>
+      <ol id="first-list" class="findings"></ol>
+    </div>
+    <div id="later-group" hidden>
+      <h2>Also worth fixing</h2>
+      <ol id="later-list" class="findings"></ol>
+    </div>
+    <p id="no-findings" class="muted" hidden>No findings were reported.</p>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+
+  var POLL_INTERVAL_MS = 1500;
+  var FINAL_STAGES = ["done", "failed", "cancelled"];
+  var SEVERITY_ORDER = { critical: 0, high: 1, medium: 2 };
+
+  var form = document.getElementById("scan-form");
+  var input = document.getElementById("repo-url");
+  var scanButton = document.getElementById("scan-button");
+  var cancelButton = document.getElementById("cancel-button");
+  var errorBox = document.getElementById("error");
+  var errorTitle = document.getElementById("error-title");
+  var errorMessage = document.getElementById("error-message");
+  var progressPanel = document.getElementById("progress");
+  var stageLabel = document.getElementById("stage");
+  var messageLabel = document.getElementById("message");
+  var temporalLink = document.getElementById("temporal-link");
+  var eventsList = document.getElementById("events");
+  var results = document.getElementById("results");
+
+  var currentScanId = null;
+  var pollTimer = null;
+
+  function safeHttpUrl(value) {
+    if (typeof value !== "string") {
+      return null;
+    }
+    try {
+      var parsed = new URL(value, window.location.href);
+      return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : null;
+    } catch (ignored) {
+      return null;
+    }
+  }
+
+  function element(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) {
+      node.className = className;
+    }
+    if (text !== undefined && text !== null) {
+      node.textContent = String(text);
+    }
+    return node;
+  }
+
+  function errorTitleFor(message) {
+    var lowered = (message || "").toLowerCase();
+    if (lowered.indexOf("not found") !== -1 || lowered.indexOf("not public") !== -1) {
+      return "Repository not found";
+    }
+    if (lowered.indexOf("too large") !== -1) {
+      return "Repository too large";
+    }
+    if (lowered.indexOf("agent") !== -1 || lowered.indexOf("api key") !== -1 || lowered.indexOf("api_key") !== -1 || lowered.indexOf("report") !== -1) {
+      return "Agent failure";
+    }
+    if (lowered.indexOf("cancel") !== -1) {
+      return "Scan cancelled";
+    }
+    return "Scan failed";
+  }
+
+  function showError(title, message) {
+    errorTitle.textContent = title;
+    errorMessage.textContent = message || "";
+    errorBox.hidden = false;
+  }
+
+  function clearError() {
+    errorBox.hidden = true;
+    errorTitle.textContent = "";
+    errorMessage.textContent = "";
+  }
+
+  function setScanning(scanning) {
+    scanButton.disabled = scanning;
+    input.disabled = scanning;
+    cancelButton.hidden = !(scanning && currentScanId);
+    cancelButton.disabled = false;
+  }
+
+  function resetResults() {
+    results.hidden = true;
+    document.getElementById("first-list").replaceChildren();
+    document.getElementById("later-list").replaceChildren();
+    document.getElementById("first-group").hidden = true;
+    document.getElementById("later-group").hidden = true;
+    document.getElementById("no-findings").hidden = true;
+    document.getElementById("truncated").hidden = true;
+  }
+
+  function renderProgress(body) {
+    progressPanel.hidden = false;
+    stageLabel.textContent = body.stage || "";
+    messageLabel.textContent = body.message || "";
+    var link = safeHttpUrl(body.temporal_ui_url);
+    if (link) {
+      temporalLink.href = link;
+      temporalLink.hidden = false;
+    }
+    var events = Array.isArray(body.events) ? body.events.slice().reverse() : [];
+    eventsList.replaceChildren.apply(eventsList, events.map(function (event) {
+      return element("li", null, event);
+    }));
+  }
+
+  function renderFinding(finding) {
+    var item = element("li", "finding");
+    var head = element("div", "finding-head");
+    head.appendChild(element("span", "rank", "#" + finding.rank));
+    var severity = String(finding.severity || "");
+    head.appendChild(element("span", "severity severity-" + severity.replace(/[^a-z]/g, ""), severity));
+    head.appendChild(element("span", "title", finding.title));
+    item.appendChild(head);
+
+    var location = finding.file || "";
+    if (finding.line !== null && finding.line !== undefined) {
+      location += ":" + finding.line;
+    }
+    item.appendChild(element("span", "location", location));
+
+    var problem = element("p");
+    problem.appendChild(element("span", "label", "Problem: "));
+    problem.appendChild(document.createTextNode(finding.problem || ""));
+    item.appendChild(problem);
+
+    var fix = element("p");
+    fix.appendChild(element("span", "label", "Fix: "));
+    fix.appendChild(document.createTextNode(finding.fix || ""));
+    item.appendChild(fix);
+
+    var docUrl = safeHttpUrl(finding.doc_url);
+    if (docUrl) {
+      var docs = element("p");
+      var anchor = element("a", null, "Temporal documentation");
+      anchor.href = docUrl;
+      anchor.target = "_blank";
+      anchor.rel = "noopener noreferrer";
+      docs.appendChild(anchor);
+      item.appendChild(docs);
+    }
+    return item;
+  }
+
+  function renderReport(report) {
+    resetResults();
+    var languages = Array.isArray(report.detected_languages) ? report.detected_languages : [];
+    document.getElementById("languages").textContent = languages.length ? languages.join(", ") : "none detected";
+    document.getElementById("summary").textContent = report.summary || "";
+    document.getElementById("truncated").hidden = !report.truncated;
+
+    var findings = (Array.isArray(report.findings) ? report.findings : []).slice().sort(function (a, b) {
+      return a.rank - b.rank;
+    });
+    var first = findings.filter(function (finding) { return SEVERITY_ORDER[finding.severity] <= 1; });
+    var later = findings.filter(function (finding) { return finding.severity === "medium"; });
+
+    var firstList = document.getElementById("first-list");
+    first.forEach(function (finding) { firstList.appendChild(renderFinding(finding)); });
+    document.getElementById("first-group").hidden = first.length === 0;
+
+    var laterList = document.getElementById("later-list");
+    later.forEach(function (finding) { laterList.appendChild(renderFinding(finding)); });
+    document.getElementById("later-group").hidden = later.length === 0;
+
+    document.getElementById("no-findings").hidden = findings.length !== 0;
+    results.hidden = false;
+  }
+
+  function stopPolling() {
+    if (pollTimer !== null) {
+      window.clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  function schedulePoll() {
+    stopPolling();
+    pollTimer = window.setTimeout(poll, POLL_INTERVAL_MS);
+  }
+
+  function readJson(response) {
+    return response.json().catch(function () { return {}; });
+  }
+
+  function detailText(body, fallback) {
+    if (body && typeof body.detail === "string") {
+      return body.detail;
+    }
+    if (body && Array.isArray(body.detail) && body.detail.length && body.detail[0].msg) {
+      return body.detail[0].msg;
+    }
+    return fallback;
+  }
+
+  function poll() {
+    if (!currentScanId) {
+      return;
+    }
+    var scanId = currentScanId;
+    fetch("/api/scans/" + encodeURIComponent(scanId))
+      .then(function (response) {
+        return readJson(response).then(function (body) { return { ok: response.ok, body: body }; });
+      })
+      .then(function (result) {
+        if (scanId !== currentScanId) {
+          return;
+        }
+        if (!result.ok) {
+          showError("Scan failed", detailText(result.body, "Could not read scan status."));
+          currentScanId = null;
+          setScanning(false);
+          return;
+        }
+        var body = result.body;
+        renderProgress(body);
+        if (FINAL_STAGES.indexOf(body.stage) === -1) {
+          schedulePoll();
+          return;
+        }
+        currentScanId = null;
+        setScanning(false);
+        if (body.stage === "done" && body.report) {
+          renderReport(body.report);
+        } else if (body.error) {
+          showError(errorTitleFor(body.error), body.error);
+        }
+      })
+      .catch(function () {
+        if (scanId === currentScanId) {
+          schedulePoll();
+        }
+      });
+  }
+
+  form.addEventListener("submit", function (event) {
+    event.preventDefault();
+    clearError();
+    resetResults();
+    var repoUrl = input.value.trim();
+    if (!repoUrl) {
+      showError("Invalid repository URL", "Enter a URL like https://github.com/owner/repo.");
+      return;
+    }
+    setScanning(true);
+    progressPanel.hidden = true;
+    temporalLink.hidden = true;
+    eventsList.replaceChildren();
+    fetch("/api/scans", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repo_url: repoUrl })
+    })
+      .then(function (response) {
+        return readJson(response).then(function (body) { return { status: response.status, ok: response.ok, body: body }; });
+      })
+      .then(function (result) {
+        if (result.status === 422) {
+          setScanning(false);
+          showError("Invalid repository URL", detailText(result.body, "Enter a URL like https://github.com/owner/repo."));
+          return;
+        }
+        if (!result.ok) {
+          setScanning(false);
+          showError("Could not start scan", detailText(result.body, "The server returned an error."));
+          return;
+        }
+        currentScanId = result.body.scan_id;
+        setScanning(true);
+        renderProgress({ stage: "queued", message: "Scan started", events: [], temporal_ui_url: result.body.temporal_ui_url });
+        schedulePoll();
+      })
+      .catch(function () {
+        setScanning(false);
+        showError("Could not start scan", "The server could not be reached.");
+      });
+  });
+
+  cancelButton.addEventListener("click", function () {
+    if (!currentScanId) {
+      return;
+    }
+    cancelButton.disabled = true;
+    fetch("/api/scans/" + encodeURIComponent(currentScanId) + "/cancel", { method: "POST" })
+      .then(function (response) {
+        if (!response.ok) {
+          cancelButton.disabled = false;
+          showError("Could not cancel scan", "The server did not accept the cancel request.");
+        }
+      })
+      .catch(function () {
+        cancelButton.disabled = false;
+        showError("Could not cancel scan", "The server could not be reached.");
+      });
+  });
+}());
+</script>
+</body>
+</html>

@@ -1,0 +1,240 @@
+{
+  "project": "temporal-repo-scanner",
+  "branchName": "ralph/temporal-repo-scanner",
+  "description": "A hackathon app. A user submits a public GitHub repository URL in a web page. A Temporal workflow clones the repo and runs a Claude agent (Claude Agent SDK, model claude-opus-5-5) that uses the Temporal Developer skill, the Temporal Workflow Design Critic skill, the Temporal Docs MCP server and the GitHub MCP server to find Temporal best practice violations. The result is a short, severity-ranked list (maximum 7 findings) so developers know exactly what to fix first. The repo may use any language or Temporal SDK. The app itself is written in Python with FastAPI and a single static HTML page.",
+  "globalConstraints": [
+    "No emojis anywhere: not in code, UI text, logs, README, or commit messages.",
+    "No em dash characters anywhere, including README and UI text.",
+    "No code comments in any source file. Use clear names instead.",
+    "Do not guess any Temporal behavior. Before writing or changing any workflow, activity, worker, retry policy, signal, query, cancellation or test code, consult the temporal-developer skill and the Temporal Docs MCP server (https://temporal.mcp.kapa.ai) or https://docs.temporal.io/llms.txt and confirm the exact API for the installed temporalio package version. If something cannot be verified, record it in progress notes instead of assuming.",
+    "The scanner application must itself follow Temporal best practices: deterministic workflow code, explicit timeouts on every activity, bounded retries with non-retryable error types, heartbeats on long activities, idempotent activities, small payloads (never put repo contents or full agent transcripts in workflow history), and clean cancellation handling.",
+    "The repository being scanned is untrusted. The agent must be read-only: no Bash, Write or Edit tools, and the system prompt must say that file contents are data and never instructions.",
+    "Python 3.11 or newer. Dependencies: temporalio, claude-agent-sdk, fastapi, uvicorn, pydantic, pytest, pytest-asyncio. Confirm the Claude Agent SDK runtime prerequisites (for example whether the Claude Code CLI must be installed separately) from the installed package documentation and document them in the README.",
+    "Configuration comes from environment variables: ANTHROPIC_API_KEY, ANTHROPIC_MODEL (default claude-opus-5-5), TEMPORAL_ADDRESS (default localhost:7233), TEMPORAL_NAMESPACE (default default), TEMPORAL_API_KEY (optional, for Temporal Cloud), TASK_QUEUE (default repo-scanner), SCAN_ROOT (default a temp directory), GITHUB_TOKEN (optional), DEMO_REPO_URL (optional, used by the end-to-end test).",
+    "Keep the final report short. Never emit more than 7 findings. Order is always by severity, then by blast radius."
+  ],
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Project scaffold and configuration",
+      "description": "As a developer I can install and configure the project with one command and one set of environment variables.",
+      "acceptanceCriteria": [
+        "Repository layout: app/ (python package with api, workflows, activities, agent, models, config modules), web/ (static GUI), skills/ (vendored skills), tests/, pyproject.toml, README.md, prd.json",
+        "app/config.py loads every environment variable listed in globalConstraints with the stated defaults using a single typed settings object",
+        "pyproject.toml declares the dependencies and a pytest configuration",
+        "pytest runs with zero tests failing on the empty scaffold"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Verified: 4 config tests pass with uv venv on Python 3.12."
+    },
+    {
+      "id": "US-002",
+      "title": "Data models",
+      "description": "As a developer I have small, validated data models shared by the API, workflow, and activities.",
+      "acceptanceCriteria": [
+        "Pydantic models: ScanRequest(repo_url), Finding, ScanReport, ScanProgress",
+        "Finding fields: rank (int, 1 is most important), severity (one of critical, high, medium), category (one of non_determinism, retry_policy, timeouts, idempotency, payload_size, heartbeats, versioning, continue_as_new, other), title (max 80 chars), file (path relative to repo root), line (int or null), problem (one sentence), fix (one sentence), doc_url (string or null)",
+        "ScanReport fields: repo_url, detected_languages (list of strings), summary (max 200 chars), findings (list, validator rejects more than 7 entries and enforces ordering by severity then rank), truncated (bool, true if more issues existed than were listed)",
+        "ScanProgress fields: stage (one of queued, cloning, preparing, scanning, parsing, done, failed, cancelled), message (short string), events (list of the most recent 25 short strings)",
+        "Unit tests cover ordering validation, the 7 finding cap, and field length limits"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Verified: 24 model tests pass (28 total)."
+    },
+    {
+      "id": "US-003",
+      "title": "GitHub URL validation",
+      "description": "As an operator I want only safe public GitHub repository URLs accepted.",
+      "acceptanceCriteria": [
+        "A single function in app/repo_url.py normalizes and validates URLs of the form https://github.com/<owner>/<repo> with optional .git suffix and optional trailing slash",
+        "Rejects every other host, scheme, embedded credentials, query strings, fragments, whitespace, leading dashes in owner or repo, and path segments beyond owner/repo",
+        "Returns owner and repo name and a canonical clone URL",
+        "The same function is used by the API endpoint and by the clone activity",
+        "Unit tests include at least 15 accepted and rejected cases including injection attempts such as option-like strings and shell metacharacters"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Verified: 51 URL tests pass (9 accepted, 40 rejected, 2 behavior). Reuse by the API (US-010) and clone activity (US-004) must call app.repo_url.parse_github_repo_url; those stories verify the wiring."
+    },
+    {
+      "id": "US-004",
+      "title": "clone_repo activity",
+      "description": "As the workflow I can obtain a shallow copy of the repo on the worker disk, safely and idempotently.",
+      "acceptanceCriteria": [
+        "Activity clones with git using an argument list (never a shell string), depth 1, no submodules, into SCAN_ROOT/<workflow_id>/repo",
+        "Idempotent: if the target directory already holds a completed clone from the same workflow, it returns immediately without re-cloning; a partial directory is removed before cloning",
+        "Enforces limits after cloning: total size at most 200 MB and at most 20000 files, otherwise raises a non-retryable ApplicationError of type RepoTooLarge",
+        "Invalid URL raises non-retryable ApplicationError of type InvalidRepoUrl; repository not found or private raises non-retryable ApplicationError of type RepoNotFound; network failures raise retryable errors",
+        "Git subprocess has a hard timeout shorter than the activity start_to_close timeout",
+        "Returns only a small result object (clone path, file count, size in bytes), never file contents",
+        "Unit tests cover idempotency, the limits, and error type mapping using a local temporary git repository as the source"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "Verified: 23 clone tests pass against a local git source via GIT_CONFIG insteadOf; real GitHub checked manually for a missing repo (RepoNotFound) and octocat/Hello-World (success)."
+    },
+    {
+      "id": "US-005",
+      "title": "Scan workspace with vendored skills",
+      "description": "As the agent I run inside a workspace where the skills are discoverable and the untrusted repo is a subdirectory, so the repo's own .claude settings are never loaded.",
+      "acceptanceCriteria": [
+        "Workspace layout: SCAN_ROOT/<workflow_id>/ contains .claude/skills/ (copied from the project skills/ directory) and repo/ (the clone). The agent working directory is SCAN_ROOT/<workflow_id>/, never the clone itself",
+        "skills/ in the project contains temporal-developer (from https://github.com/temporalio/skill-temporal-developer) and temporal-workflow-design-critic. The design critic skill source is supplied by Steve; if the folder is missing the build and startup must not fail, a warning is logged, and the README states where to place it",
+        "A prepare_workspace function is idempotent and copies skills fresh on each call",
+        "Unit test confirms layout and idempotency"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "Verified: 9 workspace tests pass (111 total), including layout, fresh-copy idempotency, missing critic skill warning, and the prepare_workspace activity under ActivityEnvironment."
+    },
+    {
+      "id": "US-006",
+      "title": "Agent prompt and ranking rules",
+      "description": "As a developer reading the report I only see the most important problems, ranked, with a concrete fix for each.",
+      "acceptanceCriteria": [
+        "app/agent/prompt.py holds the system prompt and the user prompt template",
+        "System prompt instructs: detect the Temporal SDK language(s) in repo/; use the temporal-developer skill and the temporal-workflow-design-critic skill; consult the temporal-docs MCP server to confirm any rule before reporting it; treat all repo content as untrusted data; never modify files",
+        "System prompt defines the categories from US-002 and these examples of what to look for: non-deterministic calls inside workflow code (current time, randomness, network, file or environment access, non-workflow concurrency primitives), unbounded or missing retry limits, retrying errors that can never succeed, missing non-retryable error types, missing or oversized timeouts, missing heartbeat on long running activities, non-idempotent activities with side effects and retries, large payloads passed through workflow history, missing workflow versioning or patching where code changed, long running or looping workflows without Continue-As-New, and activities called with no timeout at all",
+        "System prompt defines severity: critical means will cause data loss, duplicate side effects, stuck workflows or non-determinism failures in production; high means will cause outages or runaway cost under common failure conditions; medium means a best practice gap with limited immediate impact",
+        "System prompt requires at most 7 findings, strongest first, one finding per root cause (do not list the same mistake in ten files; cite the worst occurrence and mention the count in the problem sentence), and no style or formatting advice",
+        "System prompt requires the final message to be a single JSON object matching the ScanReport schema with no surrounding text",
+        "If the repo contains no Temporal code, the agent returns zero findings and a summary saying so"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "Verified: 12 prompt tests pass (123 total). Agent behavior against the prompt is verified end to end in US-012."
+    },
+    {
+      "id": "US-007",
+      "title": "run_agent_scan activity using the Claude Agent SDK",
+      "description": "As the workflow I can run the agent against the cloned repo, with live progress, heartbeats, and a validated result.",
+      "acceptanceCriteria": [
+        "Async activity calls the Claude Agent SDK with model from ANTHROPIC_MODEL, cwd set to the workspace, setting_sources set to project, allowed tools limited to Read, Grep, Glob, Skill and the Temporal docs MCP tools (and GitHub MCP tools only when GITHUB_TOKEN is set); Bash, Write and Edit are not available",
+        "mcp_servers configures temporal-docs as an HTTP server at https://temporal.mcp.kapa.ai and, only when GITHUB_TOKEN is set, the GitHub MCP server at https://api.githubcopilot.com/mcp with a bearer token header. Verify the exact configuration shapes against the installed SDK documentation",
+        "A turn limit is set via the SDK option for maximum turns; if the installed SDK supports a spend limit option it is also set; both values are configurable by environment variable",
+        "The activity heartbeats on every streamed message and the heartbeat details hold only a small string describing the latest step",
+        "The activity sends coarse progress updates to the workflow with signals from a Temporal client created inside the activity, throttled to at most one per 2 seconds and at most 50 per scan, containing short strings like skill loaded, file read path, docs lookup topic. No transcript text is sent",
+        "If the MCP servers fail to connect or authenticate, the scan continues with skills only and the final report summary is prefixed with a short note that docs lookup was unavailable. This must not fail the activity",
+        "Final message is parsed and validated against ScanReport. Invalid output triggers one repair attempt inside the activity by sending the validation error back to the agent; if still invalid the activity raises a retryable ApplicationError of type InvalidAgentOutput",
+        "Missing ANTHROPIC_API_KEY raises a non-retryable ApplicationError of type MissingApiKey",
+        "Activity cancellation terminates the agent and any child subprocess; verify there are no orphaned processes after cancel",
+        "Returns only the ScanReport as a plain dictionary, small enough to be safe in workflow history",
+        "Unit tests use a fake SDK query function to cover success, invalid output then repair, MCP failure degradation, and cancellation"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "Verified: 22 agent tests with a fake SDK query function pass (145 total). Live check with the real bundled CLI: a full scan of a small planted repo returned 4 valid ranked findings, and a cancel after 12 s stopped the agent in 5.9 s with no child or claude processes left."
+    },
+    {
+      "id": "US-008",
+      "title": "RepoScanWorkflow",
+      "description": "As a user I get a durable scan that survives worker restarts and can be cancelled.",
+      "acceptanceCriteria": [
+        "Workflow RepoScanWorkflow takes ScanRequest and returns ScanReport as a dictionary",
+        "Runs activities in order: clone_repo, prepare_workspace, run_agent_scan; always runs a best effort cleanup activity afterward, including on failure and cancellation",
+        "Retry policies are explicit: clone_repo start_to_close 3 minutes, maximum 3 attempts, initial interval 1 second, backoff coefficient 2.0, non-retryable types InvalidRepoUrl, RepoNotFound, RepoTooLarge; prepare_workspace start_to_close 1 minute, maximum 3 attempts; run_agent_scan start_to_close 15 minutes, heartbeat timeout 60 seconds, maximum 2 attempts, non-retryable types MissingApiKey; cleanup start_to_close 1 minute, maximum 3 attempts",
+        "Signal handler appends progress events to workflow state, keeping only the latest 25; query handler get_progress returns ScanProgress; stage is updated at each phase",
+        "Workflow code is deterministic: no random, no current time, no I/O, no unsafe imports; imports of non-deterministic modules pass through the sandbox correctly",
+        "Cancellation sets stage to cancelled and still runs cleanup",
+        "Workflow failures surface a short, human readable error message in ScanProgress with stage failed",
+        "Workflow tests using the Temporal test environment and mocked activities cover success, clone failure with no retry for non-retryable types, agent failure, cancellation with cleanup, and the signal and query path"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "Verified: 10 workflow tests pass against a local Temporal dev server with mocked activities (155 total), including replay of success and cancellation histories and a pytest filter that fails on late sandbox imports."
+    },
+    {
+      "id": "US-009",
+      "title": "Worker entrypoint",
+      "description": "As an operator I can start a worker with one command.",
+      "acceptanceCriteria": [
+        "python -m app.worker connects to TEMPORAL_ADDRESS and TEMPORAL_NAMESPACE, using TEMPORAL_API_KEY with TLS when it is set, and registers the workflow and all activities on TASK_QUEUE",
+        "On startup removes scan directories under SCAN_ROOT older than 1 hour",
+        "Limits concurrent activities to a small configurable number (default 2) because each scan is CPU, memory and cost heavy",
+        "Graceful shutdown on SIGINT and SIGTERM with a configured shutdown grace period",
+        "README documents that clone and scan activities share local disk, so the demo runs a single worker process, and what would change to scale out (for example a worker specific task queue or a single combined activity)"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": "Verified: 8 worker tests pass (163 total), including a real python -m app.worker subprocess against a local dev server that removes a stale scan dir, executes a scan to a failed state, and exits 0 on SIGTERM and SIGINT."
+    },
+    {
+      "id": "US-010",
+      "title": "HTTP API",
+      "description": "As the web page I can start a scan, poll progress, fetch the result, and cancel.",
+      "acceptanceCriteria": [
+        "POST /api/scans accepts {repo_url}, validates it with the shared validator, starts RepoScanWorkflow with workflow id scan-<owner>-<repo>-<8 char random suffix> generated in the API process, and returns {scan_id, temporal_ui_url}. Invalid URL returns 422 with a clear message",
+        "GET /api/scans/{scan_id} returns the ScanProgress from the workflow query while running, and the ScanReport plus stage done once complete; failed and cancelled stages return the error message",
+        "POST /api/scans/{scan_id}/cancel requests cancellation of the workflow",
+        "temporal_ui_url is built from a configurable base URL (default http://localhost:8233)",
+        "FastAPI serves web/ at the root path",
+        "Temporal client is created once at application startup and reused",
+        "Tests use FastAPI's test client with a fake or test environment Temporal client"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": "Verified: 20 API tests pass (183 total): FastAPI TestClient with a fake Temporal client for every endpoint and state, plus one httpx ASGI test against a local dev server and worker with mocked activities covering done, failed and cancelled."
+    },
+    {
+      "id": "US-011",
+      "title": "Web GUI",
+      "description": "As a user I paste a repo URL, watch progress, and read a short ranked list of what to fix.",
+      "acceptanceCriteria": [
+        "Single static page web/index.html with inline CSS and plain JavaScript, no build step, no external network resources",
+        "Input for the repo URL, a Scan button, and a Cancel button visible while scanning",
+        "Polls GET /api/scans/{scan_id} every 1.5 seconds, shows the stage, the latest progress events as a live feed, and a link to the Temporal UI workflow page",
+        "Results section lists findings in rank order. Critical and high findings appear under a heading Fix these first; medium findings appear under Also worth fixing. Each finding shows rank, severity label, title, file and line, the problem sentence, and the fix sentence. doc_url renders as a link when present",
+        "Shows the detected languages and the summary sentence above the findings",
+        "Clear error display for invalid URL, repo not found, repo too large, and agent failure",
+        "Supports light and dark mode through prefers-color-scheme",
+        "No emojis, no icons made of emoji characters, no decorative animations"
+      ],
+      "priority": 11,
+      "passes": true,
+      "notes": "Verified: 19 static page tests pass (202 total) and a headless Chrome run over the DevTools protocol against the real FastAPI app with a fake Temporal client covered progress, results grouping, all four error types, cancel, both color schemes and zero external requests."
+    },
+    {
+      "id": "US-012",
+      "title": "End-to-end run against the demo repo",
+      "description": "As Steve I can prove the whole pipeline works against my demo repo of bad practices.",
+      "acceptanceCriteria": [
+        "A pytest marked e2e (skipped unless DEMO_REPO_URL and ANTHROPIC_API_KEY are set) starts the workflow in a local Temporal test or dev server, runs the full scan, and asserts: the report validates, there are between 1 and 7 findings, findings are sorted by severity, every finding has a file path that exists in the cloned repo, and at least one finding has severity critical or high",
+        "A script scripts/scan_cli.py runs the same flow from the command line and prints the findings as plain text, for debugging without the GUI",
+        "Progress notes record the actual findings returned for the demo repo so Steve can compare against the violations he planted"
+      ],
+      "priority": 12,
+      "passes": true,
+      "notes": "Verified: e2e test passed against https://github.com/stwomack/bad-temporal-workflow (7 findings, sorted, all files exist, critical present) in 53 s; scripts/scan_cli.py --local verified on octocat/Hello-World (zero findings) and an invalid URL (exit 2). Findings recorded in progress.txt."
+    },
+    {
+      "id": "US-013",
+      "title": "README and demo script",
+      "description": "As a hackathon judge or teammate I can run and understand the project in five minutes.",
+      "acceptanceCriteria": [
+        "README.md in plain prose and short code blocks with no emojis, no badges, no em dashes",
+        "Sections: what it does, architecture (workflow, three activities plus cleanup, signals for progress, query for state), prerequisites, setup, running locally with temporal server start-dev, configuration table, running tests, known limitations",
+        "Documents the Temporal Docs MCP server login requirement (a one-time Google or GitHub login per the Temporal documentation) and how the app behaves when that server is unreachable",
+        "Includes a demo script of 5 steps that shows durability: start a scan, kill the worker mid-scan, restart it, and show the scan continuing from Temporal history; then show cancellation",
+        "Lists the Temporal best practices this app itself follows, each with the file that implements it"
+      ],
+      "priority": 13,
+      "passes": true,
+      "notes": "Verified: README has every required section, no emojis, badges, em dashes or file tree (ASCII only); the docs login text matches docs.temporal.io/with-ai; the 5 step demo was executed end to end against a local dev server."
+    },
+    {
+      "id": "US-014",
+      "title": "Scan the scanner",
+      "description": "As Steve I want the finished project to pass its own review.",
+      "acceptanceCriteria": [
+        "Run the app against its own repository (or a local copy) and record the findings in progress notes",
+        "Fix every critical and high finding that is a legitimate violation, and note any finding judged a false positive with the reason",
+        "All tests pass after fixes"
+      ],
+      "priority": 14,
+      "passes": true,
+      "notes": "Verified: self-scan found 1 high (worker-local disk without worker-specific task queues), fixed with host task queues; rescan reports only 3 mediums. 209 tests pass plus the live e2e test."
+    }
+  ]
+}
