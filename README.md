@@ -1,4 +1,4 @@
-# Temporal Repo Scanner
+# Temporal Workflow Analyzer
 
 ## What it does
 
